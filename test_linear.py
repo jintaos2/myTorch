@@ -44,13 +44,15 @@ import mytorch as nn
 class myMNIST(nn.Graph):
     def __init__(self):
         super().__init__()
-        self.input = nn.Variable()
-        self.linear1 = nn.linear(28*28,40)
-        self.relu1 = nn.leaky_relu(0.1)
-        self.linear2 = nn.linear(40,30)
-        self.relu2 = nn.leaky_relu(0.1)
-        self.linear3 = nn.linear(30,10)
-        self.loss = nn.loss_softmax_cross_entropy()
+        self.input = nn.Variable(self)
+        self.linear1 = nn.linear(self,28*28,40)
+        self.relu1 = nn.leaky_relu(self,0.1)
+        self.linear2 = nn.linear(self,40,30)
+        self.relu2 = nn.leaky_relu(self,0.1)
+        self.linear3 = nn.linear(self,30,10)
+        
+        self.loss = nn.loss_softmax_cross_entropy(self,)
+        self.optimizer = nn.optim_simple(0.01)
         
     def forward(self,x,y):
         self.input.connect(x)
@@ -60,14 +62,14 @@ class myMNIST(nn.Graph):
         self.relu2.connect(self.linear2)
         self.linear3.connect(self.relu2)
         self.loss.connect(self.linear3, y)
+        
         self.outputs = np.argmax(self.loss.outputs,axis=-1)
 
 
 model = myMNIST()
 batch_size = 10
 epoch = 10000
-min_step = 0.001
-max_step = 0.01
+
 
 t_start = time.time()
 for i in range(epoch):
@@ -78,7 +80,7 @@ for i in range(epoch):
     
     model.forward(x,y)
     model.backward()
-    model.step(max_step-(max_step-min_step)*i/epoch)
+    model.step()
     if np.isnan(model.loss.loss):
         break
     if i % 100 == 99:

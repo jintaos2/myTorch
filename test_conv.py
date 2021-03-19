@@ -42,19 +42,20 @@ import mytorch as nn
 class myMNIST(nn.Graph):
     def __init__(self):
         super().__init__()
-        self.infer = False
-        self.input = nn.Variable()
-        self.conv1 = nn.conv2d((4,4,1), 3, stride=2)  # (N,28,28,1) -> (N,13,13,3)
-        self.batch_norm1 = nn.barch_norm(3)
-        self.relu1 = nn.leaky_relu(0.1)
-        self.conv2 = nn.conv2d((3,3,3), 5, stride=2)  # (N,13,13,3) -> (N,6,6,5)
-        self.batch_norm2 = nn.barch_norm(5)
-        self.relu2 = nn.leaky_relu(0.1)
-        self.flatten = nn.view([6*6*5])
-        self.linear1 = nn.linear(6*6*5,30)
-        self.relu3 = nn.leaky_relu(0.1)
-        self.linear2 = nn.linear(30,10)
-        self.loss = nn.loss_softmax_cross_entropy()
+        self.input = nn.Variable(self)
+        self.conv1 = nn.conv2d(self,(4,4,1), 3, stride=2)  # (N,28,28,1) -> (N,13,13,3)
+        self.batch_norm1 = nn.barch_norm(self,3)
+        self.relu1 = nn.leaky_relu(self,0.1)
+        self.conv2 = nn.conv2d(self,(3,3,3), 5, stride=2)  # (N,13,13,3) -> (N,6,6,5)
+        self.batch_norm2 = nn.barch_norm(self,5)
+        self.relu2 = nn.leaky_relu(self,0.1)
+        self.flatten = nn.view(self,[6*6*5])
+        self.linear1 = nn.linear(self,6*6*5,30)
+        self.relu3 = nn.leaky_relu(self,0.1)
+        self.linear2 = nn.linear(self,30,10)
+        
+        self.loss = nn.loss_softmax_cross_entropy(self)
+        self.optimizer = nn.optim_simple(0.01)
         
     def forward(self,x,y):
         self.input.connect(x)
@@ -69,14 +70,13 @@ class myMNIST(nn.Graph):
         self.relu3.connect(self.linear1)
         self.linear2.connect(self.relu3)
         self.loss.connect(self.linear2, y)
-        self.outputs = np.argmax(self.loss.outputs,axis=-1)
+        
+        self.outputs = np.argmax(self.loss.outputs,axis=-1)  # classification results from softmax
 
 
 model = myMNIST()
 batch_size = 20
 epoch = 10000
-min_step = 0.001
-max_step = 0.02
 
 t_start = time.time()
 
@@ -87,7 +87,7 @@ for i in range(epoch):
     
     model.forward(x,y)
     model.backward()
-    model.step(max_step-(max_step-min_step)*i/epoch)
+    model.step()
     if np.isnan(model.loss.loss):
         break
     if i % 100 == 99:

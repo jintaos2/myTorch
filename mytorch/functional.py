@@ -1,9 +1,12 @@
 
 from .Variable import *
-# this kind of node will add up grads until it is called by all reference nodes
+
+"""
+this kind of node will add up grads until it is called by all reference nodes
+"""
 class branch(Variable):
-    def __init__(self):                               
-        super().__init__()
+    def __init__(self, graph):                               
+        super().__init__(graph)
     def connect(self, x):
         self.prevs = [x]          
         self.prevs_grads = [np.zeros(x.outputs.shape)]
@@ -16,11 +19,13 @@ class branch(Variable):
         if self.n_called == self.n_next:
             self.n_called = 0
             self.prevs[0].autograd(self.prevs_grads[0])    
-# reshape, ignore the batch_size
-# input: list [h,w,...]
+"""            
+reshape, ignore the batch_size
+input: list [h,w,...]
+"""
 class view(Variable):
-    def __init__(self, output_shape):                               
-        super().__init__()
+    def __init__(self, graph, output_shape):                               
+        super().__init__(graph)
         self.output_shape = output_shape
     def connect(self, x):
         self.prevs = [x]          
@@ -33,8 +38,8 @@ class view(Variable):
         self.prevs[0].autograd(self.prevs_grads[0])  
 
 class exp(Variable):
-    def __init__(self):                               # no parameters needed
-        super().__init__()
+    def __init__(self, graph):                               # no parameters needed
+        super().__init__(graph)
     def connect(self, x):
         self.prevs = [x]                              # store the prev nodes
         self.prevs_grads = [np.zeros(x.outputs.shape)]
@@ -46,8 +51,8 @@ class exp(Variable):
 
 
 class sigmoid(Variable):
-    def __init__(self):      
-        super().__init__()
+    def __init__(self, graph):      
+        super().__init__(graph)
     def connect(self, x):
         self.prevs = [x]     
         self.prevs_grads = [np.zeros(x.outputs.shape)]
@@ -59,8 +64,8 @@ class sigmoid(Variable):
         
    
 class relu(Variable):
-    def __init__(self):     # no parameters needed
-        super().__init__()
+    def __init__(self, graph):     # no parameters needed
+        super().__init__(graph)
     def connect(self, x):
         self.prevs = [x]    
         self.prevs_grads = [np.zeros(x.outputs.shape)]
@@ -69,9 +74,10 @@ class relu(Variable):
     def autograd(self,grads_in): 
         self.prevs_grads[0] += grads_in * (self.outputs>0) * 1.0
         self.prevs[0].autograd(self.prevs_grads[0])
+        
 class leaky_relu(Variable):
-    def __init__(self,a):    
-        super().__init__()
+    def __init__(self,graph,a):    
+        super().__init__(graph)
         self.a = -a
     def connect(self, x):
         self.prevs = [x]  
@@ -89,8 +95,8 @@ class linear(Variable):
     """
     (batch_size,input_size)*(input_size,output_size) + (1,output_size) = (batch_size, output_size)
     """
-    def __init__(self, input_size, output_size):    
-        super().__init__()
+    def __init__(self, graph, input_size, output_size):    
+        super().__init__(graph)
         # initialize the weight and bias
         self.parameters=[np.random.random((input_size,output_size))/1000.0, np.random.random((output_size))/1000.0] 
         self.need_grad = True
@@ -105,7 +111,7 @@ class linear(Variable):
         self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0),(0)])       # (N, W_in) * (N,W_out) -> (W_in, W_out)
         self.grads[1] += np.sum(grads_in,axis=0)
         self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(1),(1)])   # (N,W_out) * (W_in,W_out) ->  (N,W_in)
-        if self.print_info:
+        if super().print_info:
             print("Grad_linear\t - self:{} back:{}".format(self.grads[0].shape,self.prevs_grads[0].shape))
             print("linear:\t",np.max(self.prevs_grads[0]))
         self.prevs[0].autograd(self.prevs_grads[0])
@@ -114,11 +120,10 @@ class linear(Variable):
 CONV
 """
 
-
 # reshape, padding, input_size = (N, H, W, C)   
 class padding(Variable):
-    def __init__(self, h = (0,0), w=(0,0), value = 0):                               
-        super().__init__()
+    def __init__(self, graph, h = (0,0), w=(0,0), value = 0):                               
+        super().__init__(graph)
         self.h = h
         self.w = w
     def connect(self, x):
@@ -166,8 +171,8 @@ class conv2d(Variable):
 
     notice: no padding, size should fit! H_out = (H_in - Hk)/stride + 1
     """
-    def __init__(self, kernel_shape, out_channels, stride=1):
-        super().__init__()
+    def __init__(self, graph, kernel_shape, out_channels, stride=1):
+        super().__init__(graph)
         self.parameters=[np.random.random((out_channels,*kernel_shape))/1000.0, np.random.random((out_channels))/1000.0] 
         self.need_grad = True   
         self.stride = stride   
@@ -184,23 +189,23 @@ class conv2d(Variable):
         self.outputs = np.tensordot(self.x_im2col, self.parameters[0], axes=[(3,4,5), (1,2,3)]) + self.parameters[1]    
 
     def autograd(self,grads_in):  # grads_in: (N, H_out, W_out, C_out)
-        self.grads[1] += np.sum(grads_in, axis=(0,1,2))                                 # (N, H_out, W_out, C_out) -> (C_out)
+        self.grads[1] += np.sum(grads_in, axis=(0,1,2))    # (N, H_out, W_out, C_out) -> (C_out)
         # (N, H_out, W_out, C_out) * (N, H_out, W_out, Hk, Wk, C_in) -> (C_out, Hk, Wk, C_in)
         self.grads[0] += np.tensordot(grads_in, self.x_im2col, axes=[(0,1,2), (0,1,2)]) 
         # new kernel reshape: (C_in, Hk, Wk, C_out) and rotate 180 deg
         kernel_ = np.flip(self.parameters[0],(1,2)).swapaxes(0,3)
         grad_pad = pad_strides(grads_in, padding=(self.Hk-1,self.Wk-1), stride=self.stride)
-        #print(grad_pad.shape)
+        # print(grad_pad.shape)
         grad_im2col = im2col_strides(grad_pad,self.Hk,self.Wk,1)     # notice that the stride = 1
         # (N, H_new, W_new, Hk, Wk, C_out) * (C_in, Hk, Wk, C_out) -> (N, H, W, C_in)
         # H_new == H, W_new == W ?
-        #rint(grad_im2col.shape, kernel_.shape, self.prevs_grads[0].shape)
+        # print(grad_im2col.shape, kernel_.shape, self.prevs_grads[0].shape)
         self.prevs_grads[0] += np.tensordot(grad_im2col, kernel_, axes=[(3,4,5), (1,2,3)]) 
         self.prevs[0].autograd(self.prevs_grads[0])
 
 class barch_norm(Variable):
-    def __init__(self, C, decay=0.95, eps = 1e-5):                               
-        super().__init__()
+    def __init__(self, graph, C, decay=0.95, eps = 1e-5):                               
+        super().__init__(graph)
         self.parameters=[np.ones(C), np.zeros(C)]  # gamma, beta
         self.need_grad = True
         self.decay = decay 
