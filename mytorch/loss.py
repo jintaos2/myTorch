@@ -8,7 +8,7 @@ class loss_MSE(Variable):
         self.prevs_grads = [np.zeros(x.outputs.shape)]
         x.n_next += 1
         self.x_ = x.outputs 
-        self.y_ = np.array(y).reshape(x.outputs.shape)
+        self.y_ = np.array(y.outputs).reshape(x.outputs.shape)
         self.outputs =  np.mean((self.x_-self.y_)**2)
         if super().print_info:
             print("loss_MSE\t - in:{} out:{}".format(x.outputs.shape,self.outputs))

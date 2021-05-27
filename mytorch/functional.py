@@ -35,7 +35,7 @@ class view(Variable):
         self.outputs = x.outputs.reshape((self.batch_size, *self.output_shape))              
     def autograd(self,grads_in): 
         self.prevs_grads[0] += grads_in.reshape(self.prevs_grads[0].shape)
-        self.prevs[0].autograd(self.prevs_grads[0])  
+        self.prevs[0].autograd(self.prevs_grads[0]) 
 
 class exp(Variable):
     def __init__(self, graph):                               # no parameters needed
@@ -111,6 +111,36 @@ class linear(Variable):
         self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0),(0)])       # (N, W_in) * (N,W_out) -> (W_in, W_out)
         self.grads[1] += np.sum(grads_in,axis=0)
         self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(1),(1)])   # (N,W_out) * (W_in,W_out) ->  (N,W_in)
+        if super().print_info:
+            print("Grad_linear\t - self:{} back:{}".format(self.grads[0].shape,self.prevs_grads[0].shape))
+            print("linear:\t",np.max(self.prevs_grads[0]))
+        self.prevs[0].autograd(self.prevs_grads[0])
+
+class embedding(Variable):
+    """
+    行向量，axes 从左往右递增
+    (batch_size,seq_size,dict_size)*(dict_size,embedding_size) = (batch_size, seq_size, embedding_size)
+    """
+    def __init__(self, graph, dict_size, embedding_size, position_encoding_mat:np.ndarray):    
+        super().__init__(graph)
+        # initialize the weight and bias
+        self.parameters=[np.random.random((dict_size,embedding_size))/1000.0] 
+        self.need_grad = True
+        self.position_encoding_mat = position_encoding_mat
+    def connect(self, x):
+        self.prevs = [x]   
+        self.prevs_grads = [np.zeros(x.outputs.shape)]
+        self.grads = [np.zeros((self.parameters[0].shape))]
+        x.n_next += 1
+        self.outputs = np.tensordot(x.outputs,self.parameters[0], axes=[(2),(0)]) + self.position_encoding_mat 
+    def autograd(self,grads_in):  
+        """
+        grads_in: (batch_size, seq_size, embedding_size)
+        prev_output: (batch_size,seq_size,dict_size)
+        curr_parameter: (dict_size,embedding_size)
+        """
+        self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0,1),(0,1)])       
+        self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(2),(1)])   
         if super().print_info:
             print("Grad_linear\t - self:{} back:{}".format(self.grads[0].shape,self.prevs_grads[0].shape))
             print("linear:\t",np.max(self.prevs_grads[0]))
