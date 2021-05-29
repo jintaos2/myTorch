@@ -67,45 +67,46 @@ def positional_encoding(seq_len, word_vector_len):
 
 import mytorch as nn
 
+nn.setLogger('./')
+nn.Logger.info("xxxxx")
+# class Tranformer(nn.Graph):
+#     def __init__(self):
+#         super().__init__()
+#         self.input = nn.Variable(self)
+#         self.position_encoding_mat = positional_encoding(max_seq_len, word_vector_len)
+#         self.input_embedding = nn.embedding(self,len(dictA), word_vector_len, self.position_encoding_mat)  
+        
+#         self.output = nn.Variable(self)
+#         self.output_embedding = nn.embedding(self,len(dictB), word_vector_len, self.position_encoding_mat)
+        
+        
+#         self.loss = nn.loss_MSE(self)
+#         self.optimizer = nn.optim_simple(0.01)
+        
+#     def forward(self,x,y):
+#         self.input.connect(x)
+#         self.output.connect(y)
+#         self.input_embedding.connect(self.input)
+#         self.output_embedding.connect(self.output)
+        
+#         self.loss.connect(self.input_embedding, self.output_embedding)
+        
 
-class Tranformer(nn.Graph):
-    def __init__(self):
-        super().__init__()
-        self.input = nn.Variable(self)
-        self.position_encoding_mat = positional_encoding(max_seq_len, word_vector_len)
-        self.input_embedding = nn.embedding(self,len(dictA), word_vector_len, self.position_encoding_mat)  
-        
-        self.output = nn.Variable(self)
-        self.output_embedding = nn.embedding(self,len(dictB), word_vector_len, self.position_encoding_mat)
-        
-        
-        self.loss = nn.loss_MSE(self)
-        self.optimizer = nn.optim_simple(0.01)
-        
-    def forward(self,x,y):
-        self.input.connect(x)
-        self.output.connect(y)
-        self.input_embedding.connect(self.input)
-        self.output_embedding.connect(self.output)
-        
-        self.loss.connect(self.input_embedding, self.output_embedding)
-        
 
+# model = Tranformer()
+# t_start = time.time()
+# for i in range(10000):
+#     model.forward(X,Y)
+#     model.backward()
+#     model.step()
+#     if np.isnan(model.loss.outputs):
+#         break
+#     if i % 100 == 99:
+#         print("iteration =",i,"\t\tloss =",model.loss.outputs)
 
-model = Tranformer()
-t_start = time.time()
-for i in range(10000):
-    model.forward(X,Y)
-    model.backward()
-    model.step()
-    if np.isnan(model.loss.outputs):
-        break
-    if i % 100 == 99:
-        print("iteration =",i,"\t\tloss =",model.loss.outputs)
+# print("training time:",time.time()-t_start)
 
-print("training time:",time.time()-t_start)
-
-print(model.input_embedding.parameters[0])
+# print(model.input_embedding.parameters[0])
 
 
 

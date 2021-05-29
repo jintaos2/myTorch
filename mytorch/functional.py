@@ -1,10 +1,11 @@
 
-from .Variable import *
+from .Graph import *
+from typing import List, Set, Dict, Tuple, Optional
 
 """
 this kind of node will add up grads until it is called by all reference nodes
 """
-class branch(Variable):
+class branch(Node):
     def __init__(self, graph):                               
         super().__init__(graph)
     def connect(self, x):
@@ -23,100 +24,119 @@ class branch(Variable):
 reshape, ignore the batch_size
 input: list [h,w,...]
 """
-class view(Variable):
-    def __init__(self, graph, output_shape):                               
-        super().__init__(graph)
-        self.output_shape = output_shape
-    def connect(self, x):
-        self.prevs = [x]          
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        x.n_next += 1  
-        self.batch_size = x.outputs.shape[0]                         
-        self.outputs = x.outputs.reshape((self.batch_size, *self.output_shape))              
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in.reshape(self.prevs_grads[0].shape)
-        self.prevs[0].autograd(self.prevs_grads[0]) 
-
-class exp(Variable):
-    def __init__(self, graph):                               # no parameters needed
-        super().__init__(graph)
-    def connect(self, x):
-        self.prevs = [x]                              # store the prev nodes
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        x.n_next += 1                                 # ref count
-        self.outputs = np.exp(x.outputs)              # calculate output
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in * self.outputs
-        self.prevs[0].autograd(self.prevs_grads[0])
+class view(Node):
+    def __init__(self, graph:Graph, output_shape, *ports:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [*ports]    
+        self.input_shape = self.inputs[0].value.shape
+        self.output_shape = [self.input_shape[0], *output_shape]   
+        self.outputs: List[Port] = [ Port(np.zeros(self.output_shape)) ]
+        self.parameters: List[np.ndarray] = []     
+        self.gradients: List[np.ndarray] = []  
+    def forward(self):
+        self.outputs[0].value = self.inputs[0].value.reshape(self.output_shape) 
+    def backward(self):
+        self.inputs[0].grad = self.outputs[0].grad.reshape(self.input_shape)
 
 
-class sigmoid(Variable):
-    def __init__(self, graph):      
-        super().__init__(graph)
-    def connect(self, x):
-        self.prevs = [x]     
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        x.n_next += 1
-        self.outputs = 1.0/(1+np.exp(x.outputs)) 
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in * self.outputs * (1-self.outputs)
-        self.prevs[0].autograd(self.prevs_grads[0])
+"""
+input:  graph, and a port(a tensor) 
+output: exp(input tensor)
+input shape: any
+"""
+class exp(Node):
+    def __init__(self, graph:Graph, *ports:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [*ports]            # reference of ports of prev nodes
+        self.outputs: List[Port] = [Port(np.zeros(self.inputs[0].value.shape)) ] # output shape = input shape
+        self.parameters: List[np.ndarray] = []     # no parameters
+        self.gradients: List[np.ndarray] = []      # no gradients 
+    def forward(self):
+        self.outputs[0].value = np.exp(self.inputs[0].value)  # update output value
+    def backward(self):
+        self.inputs[0].grad = self.outputs[0].grad * self.outputs[0].value  # update grads
         
-   
-class relu(Variable):
-    def __init__(self, graph):     # no parameters needed
-        super().__init__(graph)
-    def connect(self, x):
-        self.prevs = [x]    
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        x.n_next += 1
-        self.outputs = x.outputs * (x.outputs > 0) 
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in * (self.outputs>0) * 1.0
-        self.prevs[0].autograd(self.prevs_grads[0])
+
+
+class sigmoid(Node):
+    def __init__(self, graph:Graph, *ports:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [*ports]             
+        self.outputs: List[Port] = [ Port(np.zeros(self.inputs[0].value.shape)) ]
+        self.parameters: List[np.ndarray] = []     
+        self.gradients: List[np.ndarray] = []    
+    def forward(self):
+        self.outputs[0].value = 1.0/(1+np.exp(self.inputs[0].value))  
+    def backward(self):
+        y = self.outputs[0]
+        self.inputs[0].grad = y.grad * y.value * (1-y.value)
         
-class leaky_relu(Variable):
-    def __init__(self,graph,a):    
-        super().__init__(graph)
-        self.a = -a
-    def connect(self, x):
-        self.prevs = [x]  
-        x.n_next += 1
-        self.local_grads = (x.outputs < 0)*self.a + (x.outputs >= 0) * 1.0
-        self.outputs = x.outputs*self.local_grads
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-#         if self.print_info:
-#             print("leaky_relu\t - in:{} out:{}".format(x.outputs.shape,x.outputs.shape)) 
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += self.local_grads * grads_in
-        self.prevs[0].autograd(self.prevs_grads[0])
 
-class linear(Variable):
-    """
-    (batch_size,input_size)*(input_size,output_size) + (1,output_size) = (batch_size, output_size)
-    """
-    def __init__(self, graph, input_size, output_size):    
-        super().__init__(graph)
-        # initialize the weight and bias
-        self.parameters=[np.random.random((input_size,output_size))/1000.0, np.random.random((output_size))/1000.0] 
-        self.need_grad = True
-    def connect(self, x):
-        self.prevs = [x]   
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        self.grads = [np.zeros((self.parameters[0].shape)), np.zeros((self.parameters[1].shape))]
-        x.n_next += 1
-        # print(  x.outputs.shape, self.parameters[0].shape, self.parameters[1].shape)
-        self.outputs = np.tensordot( x.outputs,self.parameters[0], axes=[(1),(0)]) + self.parameters[1]        # (N, W_in) * (W_in,W_out) -> (N,W_out)
-    def autograd(self,grads_in):  
-        self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0),(0)])       # (N, W_in) * (N,W_out) -> (W_in, W_out)
-        self.grads[1] += np.sum(grads_in,axis=0)
-        self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(1),(1)])   # (N,W_out) * (W_in,W_out) ->  (N,W_in)
-        if super().print_info:
-            print("Grad_linear\t - self:{} back:{}".format(self.grads[0].shape,self.prevs_grads[0].shape))
-            print("linear:\t",np.max(self.prevs_grads[0]))
-        self.prevs[0].autograd(self.prevs_grads[0])
+class relu(Node):
+    def __init__(self, graph:Graph, *ports:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [*ports]             
+        self.outputs: List[Port] = [ Port(np.zeros(self.inputs[0].value.shape)) ]  
+        self.parameters: List[np.ndarray] = []     
+        self.gradients: List[np.ndarray] = []    
+    def forward(self):
+        x = self.inputs[0]
+        self.outputs[0].value = x.value * (x.value > 0)  
+    def backward(self):
+        y = self.outputs[0]
+        self.inputs[0].grad = y.grad * (y.value > 0)
+        
 
-class embedding(Variable):
+        
+class leaky_relu(Node):
+    """
+    input: (batch size, ...)
+    output: (batch size, ...)
+    """
+    def __init__(self, graph:Graph, coeff:float, inputs:Port):                               
+        graph.nodes.append(self)
+        self.inputs:  List[Port] = [inputs]             
+        self.outputs: List[Port] = [ Port(np.zeros(inputs.value.shape))]  
+        self.parameters: List[np.ndarray] = []     
+        self.gradients:  List[np.ndarray] = []    
+        self.coeff = coeff   # 0.1  
+    def forward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        self.local_grads = (x.value < 0) * self.coeff + (x.value >= 0) * 1.0
+        y.value = x.value * self.local_grads  
+    def backward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        x.grad = self.local_grads * y.grad   # y > 0 ? 1 : 0.1
+        
+
+class linear(Node):
+    """
+    last dim -> new dim: tensordot([(-1),(-1)])
+    (batch_size, input_size)*(output_size,input_size)+(1,output_size) = (batch_size, output_size)
+    """
+    def __init__(self, graph:Graph, output_size:int, inputs:Port):                               
+        graph.nodes.append(self)
+        self.inputs:  List[Port] = [inputs]             
+        batch_size, input_size = inputs.value.shape    # fake batch_size 
+        self.outputs: List[Port] = [ Port(np.zeros((batch_size, output_size))) ]  
+        self.parameters: List[np.ndarray] = [(np.random.random((output_size, input_size))-0.5)/1000.0, 
+                                             (np.random.random((output_size))-0.5)/1000.0]    
+        self.gradients:  List[np.ndarray] = [np.zeros((self.parameters[0].shape)), np.zeros((self.parameters[1].shape))]
+    def forward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        y.value = np.tensordot(x.value, self.parameters[0], axes=[(-1),(-1)]) + self.parameters[1]
+    def backward(self):
+        y = self.outputs[0] 
+        x = self.inputs[0]
+        self.gradients[0] = np.tensordot( y.grad, x.value, axes=[(0), (0)])   # (output_size,input_size)
+        self.gradients[1] = np.sum(y.grad,axis=0)
+        x.grad = np.tensordot(y.grad, self.parameters[0], axes=[(-1),(0)])
+        
+
+class embedding(Node):
     """
     行向量，axes 从左往右递增
     (batch_size,seq_size,dict_size)*(dict_size,embedding_size) = (batch_size, seq_size, embedding_size)
@@ -141,9 +161,6 @@ class embedding(Variable):
         """
         self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0,1),(0,1)])       
         self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(2),(1)])   
-        if super().print_info:
-            print("Grad_linear\t - self:{} back:{}".format(self.grads[0].shape,self.prevs_grads[0].shape))
-            print("linear:\t",np.max(self.prevs_grads[0]))
         self.prevs[0].autograd(self.prevs_grads[0])
 
 """
@@ -151,7 +168,7 @@ CONV
 """
 
 # reshape, padding, input_size = (N, H, W, C)   
-class padding(Variable):
+class padding(Node):
     def __init__(self, graph, h = (0,0), w=(0,0), value = 0):                               
         super().__init__(graph)
         self.h = h
@@ -191,7 +208,7 @@ def pad_strides(x, padding = (0,0), stride = 1):
     return ret
 
 
-class conv2d(Variable):
+class conv2d(Node):
     """
     kernel_shape: Hk, Wk, C_in 
 
@@ -233,7 +250,7 @@ class conv2d(Variable):
         self.prevs_grads[0] += np.tensordot(grad_im2col, kernel_, axes=[(3,4,5), (1,2,3)]) 
         self.prevs[0].autograd(self.prevs_grads[0])
 
-class barch_norm(Variable):
+class barch_norm(Node):
     def __init__(self, graph, C, decay=0.95, eps = 1e-5):                               
         super().__init__(graph)
         self.parameters=[np.ones(C), np.zeros(C)]  # gamma, beta

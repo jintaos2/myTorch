@@ -9,7 +9,6 @@ matplotlib.use('Qt5Agg')
 from matplotlib import pyplot as plt
 
 
-
 files = ['t10k-images-idx3-ubyte.gz',
          't10k-labels-idx1-ubyte.gz',
          'train-images-idx3-ubyte.gz',
@@ -22,9 +21,14 @@ def readlabels(path):
     with gzip.open(path, 'rb') as f1: # 以二进制方式读取
         data = f1.read()
         return [int(i) for i in data[8:]] # 舍弃前8个字节
-test_labels = np.array(readlabels(filepaths[1]))
-train_labels = np.array(readlabels(filepaths[3]))
-def readimgs(path):
+def get_onehot(input, n_class):
+    ret = np.zeros((len(input),n_class))
+    for i in range(len(input)):
+        ret[i][input[i]] = 1 
+    return ret
+test_labels = get_onehot(readlabels(filepaths[1]),10)
+train_labels = get_onehot(readlabels(filepaths[3]),10)
+def readimgs(path)->np.ndarray:
     with gzip.open(path, 'rb') as f1:
         data = f1.read()
         n_imgs = (len(data)-16)//(28*28)  # 舍弃前16个字符
@@ -34,42 +38,54 @@ def readimgs(path):
             offset = 16+28*28*i
             images[i] = np.array(struct.unpack_from(fmt, data, offset)).reshape((28,28))
     return images
+# 10000, 28*28
 test_imgs = readimgs(filepaths[0]).reshape((10000,-1))
 train_imgs = readimgs(filepaths[2]).reshape((60000,-1))
 
 
 
 import mytorch as nn
+nn.setLogger('./')
+
+batch_size = 15
+epoch = 20000
 
 class myMNIST(nn.Graph):
     def __init__(self):
         super().__init__()
-        self.input = nn.Variable(self)
-        self.linear1 = nn.linear(self,28*28,40)
-        self.relu1 = nn.leaky_relu(self,0.1)
-        self.linear2 = nn.linear(self,40,30)
-        self.relu2 = nn.leaky_relu(self,0.1)
-        self.linear3 = nn.linear(self,30,10)
+        # feed
+        self.x: nn.Port = nn.Port(np.zeros((1,28*28)))   # fake batch size
+        self.y: nn.Port = nn.Port(np.zeros((1,10)))
+        # layers
+        self.linear1 = nn.linear(self, 40, self.x)
+        self.linear1_out: nn.Port = self.linear1.outputs[0]
         
-        self.loss = nn.loss_softmax_cross_entropy(self,)
+        self.relu1 = nn.leaky_relu(self,0.1, self.linear1_out)
+        self.relu1_out: nn.Port = self.relu1.outputs[0]
+        
+        self.linear2 = nn.linear(self,30, self.relu1_out)
+        self.linear2_out: nn.Port =  self.linear2.outputs[0]
+        
+        self.relu2 = nn.leaky_relu(self,0.1,self.linear2_out)
+        self.relu2_out: nn.Port = self.relu2.outputs[0]
+        
+        self.linear3 = nn.linear(self,10, self.relu2_out)
+        self.linear3_out = self.linear3.outputs[0]
+        # loss
+        self.loss = nn.loss_softmax_cross_entropy(self, self.linear3_out, self.y)
+        self.loss_out = self.loss.outputs[1]
+        self.outputs = self.loss.outputs[0]
+        
         self.optimizer = nn.optim_simple(0.01)
+    """
+    x: (batch size, 28*28)
+    y: (batch size, 10)
+    """
+    def feed(self, x:np.ndarray, y:np.ndarray):
+        self.x.value = x 
+        self.y.value = y
         
-    def forward(self,x,y):
-        self.input.connect(x)
-        self.linear1.connect(self.input)
-        self.relu1.connect(self.linear1)
-        self.linear2.connect(self.relu1)
-        self.relu2.connect(self.linear2)
-        self.linear3.connect(self.relu2)
-        self.loss.connect(self.linear3, y)
-        
-        self.outputs = np.argmax(self.loss.outputs,axis=-1)
-
-
 model = myMNIST()
-batch_size = 10
-epoch = 10000
-
 
 t_start = time.time()
 for i in range(epoch):
@@ -78,20 +94,22 @@ for i in range(epoch):
     x = train_imgs[idxes]
     y = train_labels[idxes]
     
-    model.forward(x,y)
+    model.feed(x,y)
+    model.forward()
     model.backward()
     model.step()
-    if np.isnan(model.loss.loss):
+    loss = model.loss_out.extra
+    if np.isnan(loss):
         break
     if i % 100 == 99:
-        print("iteration =",i,"\t\tloss =",model.loss.loss, "\t\tbatch_accuracy =",np.sum(model.outputs==y)/batch_size)
+        nn.Logger.info(f"iteration = {i}\t\tloss={loss}" )
 
-print("training time:",time.time()-t_start)
-test_size = 9000
-idxes = np.random.randint(10000, size=test_size)
-x = test_imgs[idxes]
-y = test_labels[idxes]
-model.forward(x,y)
+nn.Logger.info("training time: {}".format(time.time()-t_start))
 
-accuracy = np.sum(model.outputs == y) / test_size
-print("test accuracy:",accuracy)
+x = test_imgs
+y = test_labels
+model.feed(x,y)
+model.forward()
+
+accuracy = np.sum(model.outputs.value.argmax(axis=-1) == y.argmax(axis=-1)) / 10000
+nn.Logger.info(f"test accuracy: {accuracy}")
