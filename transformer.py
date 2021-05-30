@@ -1,7 +1,15 @@
 
-import numpy as np
-import re
+import sys
+import os
 import time
+import re
+import numpy as np
+import matplotlib
+matplotlib.use('Qt5Agg')
+from matplotlib import pyplot as plt
+
+import mytorch as nn
+nn.setLogger('./')
 
 languageA = ["ich mochte ein bier", "ich mochte ein cola", "ich mochte ein orangensaft"]
 languageB = ["i want a beer", "i want a coke", "i want a orange juice"]
@@ -30,30 +38,32 @@ generate_dict(languageB, dictB)
 
 max_seq_len = 20        # pre defined  max sequence length
 word_vector_len = 16    # self defined embedding size: 16
-width_Q = 10            # self defined Query matrix width
-height_K = 30           # self defined Key matrix height
+width_QK = 10            # self defined Query & Key matrix width
 
 # onehot encoding
 # output size: batch_size * max_sequence_length * dictornary size
-# mask size: batch_size * max_sequence_length * height_K
+# mask size: batch_size * max_sequence_length * max_sequence_length
+# not masked size: batch_size * max_sequence_length * real_sequence_length
 def word2onehot(data:list, dictionary:dict, decode = False):
     prefix = [Decode_Start] if decode else []
     suffix = [Decode_Stop] if decode else [Encode_Stop]
     ret = np.zeros((len(data), max_seq_len, len(dictionary)), dtype='float64')
-    mask = np.zeros((len(data), max_seq_len, height_K), dtype='float64')
+    mask = np.zeros((len(data), max_seq_len, max_seq_len), dtype='float64')
     for i in range(len(data)):
         words = prefix + re.split(r'[\s]+',data[i].strip()) + suffix
-        mask[i,len(words):,:] = - 1e-30
+        mask[i,:, len(words):] = - 1e-30
         words += (max_seq_len - len(words)) * suffix
         for j in range(len(words)):
             word_idx = dictionary[words[j]]
             ret[i,j,word_idx] = 1.0
     return ret, mask
     
-X, maskX = word2onehot(languageA, dictA, decode = False)
+# batch_size * max_sequence_length * dictA size
+# batch_size * max_sequence_length * dictB size
+X, maskX = word2onehot(languageA, dictA, decode = False) 
 Y, maskY = word2onehot(languageB, dictB, decode = True) 
 
-# print(Y)
+
 
 def positional_encoding(seq_len, word_vector_len):
     ret = np.zeros((seq_len, word_vector_len))
@@ -64,49 +74,46 @@ def positional_encoding(seq_len, word_vector_len):
             else:
                 ret[pos,i] = np.sin(pos/np.power(10000, i/word_vector_len))
     return ret 
+position_mat = positional_encoding(max_seq_len, word_vector_len)
 
-import mytorch as nn
 
-nn.setLogger('./')
-nn.Logger.info("xxxxx")
-# class Tranformer(nn.Graph):
-#     def __init__(self):
-#         super().__init__()
-#         self.input = nn.Variable(self)
-#         self.position_encoding_mat = positional_encoding(max_seq_len, word_vector_len)
-#         self.input_embedding = nn.embedding(self,len(dictA), word_vector_len, self.position_encoding_mat)  
+class Tranformer(nn.Graph):
+    def __init__(self):
+        super().__init__()
         
-#         self.output = nn.Variable(self)
-#         self.output_embedding = nn.embedding(self,len(dictB), word_vector_len, self.position_encoding_mat)
+        self.encoder_in: nn.Port = nn.Port(np.zeros((1,max_seq_len, len(dictA))))
+        self.decoder_in: nn.Port = nn.Port(np.zeros((1,max_seq_len, len(dictB))))
+        
+        # use same seq_len and word_vec_len for language A and B
+        self.encoder_embedding = nn.embedding(self, word_vector_len, position_mat, self.encoder_in)  
+        self.decoder_embedding = nn.embedding(self, word_vector_len, position_mat, self.decoder_in) 
         
         
-#         self.loss = nn.loss_MSE(self)
-#         self.optimizer = nn.optim_simple(0.01)
+        self.loss = nn.loss_MSE(self, self.encoder_embedding.outputs[0], self.decoder_embedding.outputs[0])
+        self.optimizer = nn.optim_simple(0.01)
         
-#     def forward(self,x,y):
-#         self.input.connect(x)
-#         self.output.connect(y)
-#         self.input_embedding.connect(self.input)
-#         self.output_embedding.connect(self.output)
-        
-#         self.loss.connect(self.input_embedding, self.output_embedding)
+    def feed(self, x:np.ndarray, y:np.ndarray):
+        self.encoder_in.value = x 
+        self.decoder_in.value = y
         
 
 
-# model = Tranformer()
-# t_start = time.time()
-# for i in range(10000):
-#     model.forward(X,Y)
-#     model.backward()
-#     model.step()
-#     if np.isnan(model.loss.outputs):
-#         break
-#     if i % 100 == 99:
-#         print("iteration =",i,"\t\tloss =",model.loss.outputs)
+        
+model = Tranformer()
 
-# print("training time:",time.time()-t_start)
+t_start = time.time()
+for i in range(10000):
+    
+    model.feed(X,Y)
+    model.forward()
+    model.backward()
+    model.step()
+    loss = model.loss.outputs[0].extra
+    if i % 100 == 99:
+        nn.Logger.info(f"iteration = {i}\t\tloss={loss}" )
 
-# print(model.input_embedding.parameters[0])
+nn.Logger.info("training time: {}".format(time.time()-t_start))
+
 
 
 

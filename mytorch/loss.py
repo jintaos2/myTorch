@@ -1,32 +1,32 @@
 from .Graph import *
 
 class loss_MSE(Node):
-    def __init__(self, graph):      
-        super().__init__(graph)
-    def connect(self, x, y):   # 2 inputs, 1D array
-        self.prevs = [x]    
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        x.n_next += 1
-        self.x_ = x.outputs 
-        self.y_ = np.array(y.outputs).reshape(x.outputs.shape)
-        self.outputs =  np.mean((self.x_-self.y_)**2)
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in*2.0/self.x_.shape[0]*(self.x_ - self.y_)
-        self.prevs[0].autograd(self.prevs_grads[0])
+    """
+    input:   (batch_size, ...,  n_classes) x 2   
+    output:  loss value
+    
+    input[0] is prev output 
+    input[1] is ground truth (onehot encoding)
+    output[0] is loss
+    """
+    def __init__(self, graph:Graph, y_out:Port, y_true:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [y_out, y_true]      
+        self.outputs: List[Port] = [Port(np.zeros(1), 0.0)]
+        self.parameters: List[np.ndarray] = []     
+        self.gradients: List[np.ndarray] = []  
+    def forward(self):
+        x = self.inputs[0]
+        y = self.inputs[1]
+        self.batch_size = x.value.shape[0]
+        self.outputs[0].extra = np.sum((x.value - y.value)**2)/self.batch_size
+        
+    def backward(self):
+        x = self.inputs[0]
+        y = self.inputs[1]  
+        self.inputs[0].grad = 2.0/self.batch_size * (x.value - y.value)
         
         
-        
-    # def __init__(self, graph:Graph, *ports:Port):                               
-    #     graph.nodes.append(self)
-    #     self.inputs: tuple[Port] = ports            
-    #     self.outputs: tuple[Port] = ( Port(np.zeros(self.inputs[0].value.shape)) )  
-    #     self.parameters: list[np.ndarray] = []     
-    #     self.gradients: list[np.ndarray] = []    
-    # def forward(self):
-    #     self.outputs[0].value = 1.0/(1+np.exp(self.inputs[0].value))  
-    # def backward(self):
-    #     y = self.outputs[0]
-    #     self.inputs[0].grad = y.grad * y.value * (1-y.value)
 class loss_softmax_cross_entropy(Node):
     """
     input:   (batch_size, ...,  n_classes) x 2   

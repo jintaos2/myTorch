@@ -9,6 +9,7 @@ n to m node: gradients are accumulated m times, then call back-propagation n tim
 """
 
 import numpy as np
+import copy
 import logging
 import os
 from typing import List, Set, Dict, Tuple, Optional

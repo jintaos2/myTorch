@@ -3,23 +3,26 @@ from .Graph import *
 from typing import List, Set, Dict, Tuple, Optional
 
 """
-this kind of node will add up grads until it is called by all reference nodes
+1 port to n ports
 """
 class branch(Node):
-    def __init__(self, graph):                               
-        super().__init__(graph)
-    def connect(self, x):
-        self.prevs = [x]          
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        self.n_called = 0
-        x.n_next += 1                             
-        self.outputs = x.outputs              
-    def autograd(self,grads_in): 
-        self.prevs_grads[0] += grads_in
-        self.n_called += 1
-        if self.n_called == self.n_next:
-            self.n_called = 0
-            self.prevs[0].autograd(self.prevs_grads[0])    
+    def __init__(self, graph:Graph, N:int, inputs:Port):                               
+        graph.nodes.append(self)
+        self.inputs: List[Port] = [inputs]             
+        self.forward()
+        self.parameters: List[np.ndarray] = []     
+        self.gradients: List[np.ndarray] = [] 
+        self.N = N   
+    def forward(self):
+        self.outputs: List[Port] = []
+        for i in range(self.N):
+            self.outputs.append(copy.deepcopy(self.inputs[0]))
+    def backward(self):
+        x = self.inputs[0]
+        x.grad = np.zeros((x.value.shape))
+        for i in self.outputs:
+            x.grad += i.grad
+             
 """            
 reshape, ignore the batch_size
 input: list [h,w,...]
@@ -56,7 +59,6 @@ class exp(Node):
     def backward(self):
         self.inputs[0].grad = self.outputs[0].grad * self.outputs[0].value  # update grads
         
-
 
 class sigmoid(Node):
     def __init__(self, graph:Graph, *ports:Port):                               
@@ -135,38 +137,123 @@ class linear(Node):
         self.gradients[1] = np.sum(y.grad,axis=0)
         x.grad = np.tensordot(y.grad, self.parameters[0], axes=[(-1),(0)])
         
-
+"""
+transformer
+"""
 class embedding(Node):
     """
-    行向量，axes 从左往右递增
-    (batch_size,seq_size,dict_size)*(dict_size,embedding_size) = (batch_size, seq_size, embedding_size)
+    (batch_size, seq_size, dict_size) * (embedding_size, dict_size) + position_mat = (batch_size, seq_size, embedding_size)
+    position_mat: (seq_size, embedding_size), constant
     """
-    def __init__(self, graph, dict_size, embedding_size, position_encoding_mat:np.ndarray):    
-        super().__init__(graph)
-        # initialize the weight and bias
-        self.parameters=[np.random.random((dict_size,embedding_size))/1000.0] 
-        self.need_grad = True
-        self.position_encoding_mat = position_encoding_mat
-    def connect(self, x):
-        self.prevs = [x]   
-        self.prevs_grads = [np.zeros(x.outputs.shape)]
-        self.grads = [np.zeros((self.parameters[0].shape))]
-        x.n_next += 1
-        self.outputs = np.tensordot(x.outputs,self.parameters[0], axes=[(2),(0)]) + self.position_encoding_mat 
-    def autograd(self,grads_in):  
-        """
-        grads_in: (batch_size, seq_size, embedding_size)
-        prev_output: (batch_size,seq_size,dict_size)
-        curr_parameter: (dict_size,embedding_size)
-        """
-        self.grads[0] += np.tensordot(self.prevs[0].outputs,grads_in, axes=[(0,1),(0,1)])       
-        self.prevs_grads[0] += np.tensordot(grads_in, self.parameters[0], axes=[(2),(1)])   
-        self.prevs[0].autograd(self.prevs_grads[0])
+    def __init__(self, graph:Graph, embedding_size:int, position_mat:np.ndarray, inputs:Port):    
+        graph.nodes.append(self)
+        self.inputs:  List[Port] = [inputs]             
+        batch_size, seq_size, dict_size = inputs.value.shape     
+        self.outputs: List[Port] = [ Port(np.zeros((batch_size, seq_size, embedding_size))) ]  
+        self.parameters: List[np.ndarray] = [(np.random.random((embedding_size, dict_size))-0.5)/1000.0]    
+        self.gradients:  List[np.ndarray] = [np.zeros((self.parameters[0].shape)) ]
+        self.position_mat = position_mat
+    def forward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        y.value = np.tensordot(x.value, self.parameters[0], axes=[(-1),(-1)]) + self.position_mat
+    def backward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        # Logger.info(f"x_value:{x.value.shape}  y_value:{y.value.shape}  y_grad:{y.grad.shape}")
+        self.gradients[0] = np.tensordot( y.grad, x.value, axes=[(0,1), (0,1)])
+        x.grad = np.tensordot(y.grad, self.parameters[0], axes=[(-1),(0)])
 
+
+def softmax_grad(y:np.ndarray, grad_in:np.ndarray):
+    shape1 = y.shape 
+    length = shape1[-1]
+    y_ = y.reshape((-1,length))
+    grad_ = grad_in.reshape((-1,length))
+    out = np.zeros(y_.shape)
+    for i in range(y_.shape[0]):
+        y_line = y_[i]
+        grad_line = grad_[i]
+        out[i] = np.dot(grad_line, np.diag(y_line) - np.outer(y_line, y_line))
+    return out.reshape(shape1)
+    
+def matrix_grad(X, A, grad_in):
+    """
+    2d tensors: Y = np.dot(X,A)
+    """
+    grad_A = np.dot(X.T, grad_in)
+    grad_X = np.dot(grad_in, A.T)
+    return grad_X, grad_A
+
+class attention(Node):
+    """
+    input: (batch_size, seq_size, embedding_size)
+    W_Q: (embedding_size, width_qk) -> Q: (batch_size, seq_size, width_qk) 
+    W_K: (embedding_size, width_qk) -> K: (batch_size, seq_size, width_qk)
+    W_V: (embedding_size, embedding_size) -> V: (batch_size, seq_size, embedding_size)
+    Q * K^T : (batch_size, seq_size, seq_size)
+    softmax(Q * K^T + mask): (batch_size, seq_size, seq_size)
+    Q * K^T * V: (batch_size, seq_size, embedding_size)
+    """
+    def __init__(self, graph:Graph, width_qk:int, mask:Port, inputs:Port):  
+        graph.nodes.append(self)
+        self.inputs:  List[Port] = [inputs, mask]
+        self.outputs: List[Port] = [ Port(np.zeros(inputs.value.shape)) ]  
+        _, self.seq_size, self.embedding_size = inputs.value.shape
+        self.parameters: List[np.ndarray] = [(np.random.random((width_qk, self.embedding_size))-0.5)/1000.0,
+                                             (np.random.random((width_qk, self.embedding_size))-0.5)/1000.0,
+                                             (np.random.random((self.embedding_size, self.embedding_size))-0.5)/1000.0]    
+        self.gradients:  List[np.ndarray] = [np.zeros((self.parameters[0].shape)), 
+                                             np.zeros((self.parameters[1].shape)),
+                                             np.zeros((self.parameters[2].shape))]
+    def forward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        self.batch_size = x.value.shape[0]
+        self.Q = np.tensordot(x, self.parameters[0], axes=[(-1),(0)])
+        self.K = np.tensordot(x, self.parameters[1], axes=[(-1),(0)])
+        self.V = np.tensordot(x, self.parameters[2], axes=[(-1),(0)])
+        self.QK = np.zeros((self.batch_size, self.seq_size, self.seq_size))
+        for i in range(self.batch_size):
+            self.QK[i] = np.dot(self.Q[i],self.K[i].T)/np.sqrt(self.embedding_size)
+        self.QK -= np.max(self.QK, axis=-1).reshape((self.batch_size, self.seq_size, 1))  # avoid overflow
+        self.QK_exp = np.exp(self.QK)
+        self.QK_softmax = self.QK_exp/np.sum(self.QK_exp, axis=-1).reshape((self.batch_size, self.seq_size, 1))+self.inputs[1].value
+        for i in range(self.batch_size):
+            y.value[i] = np.dot(self.QK_softmax[i], self.V[i])
+        
+    def backward(self):
+        x = self.inputs[0]
+        y = self.outputs[0]
+        x.grad = np.zeros(x.value.shape)
+        self.gradients:  List[np.ndarray] = [np.zeros((self.parameters[0].shape)), 
+                                             np.zeros((self.parameters[1].shape)),
+                                             np.zeros((self.parameters[2].shape))]
+        for i in range(self.batch_size):
+            grad_softmax, grad_V = matrix_grad(self.QK_softmax[i], self.V[i], y.grad[i])
+            grad_x1, grad_W_V = matrix_grad(x.value[i], self.parameters[2], grad_V)
+            grad_QK = softmax_grad(self.QK_softmax[i], grad_softmax) / np.sqrt(self.embedding_size)
+            grad_Q, grad_KT = matrix_grad(self.Q[i], self.K.T[i], grad_QK)
+            grad_K = grad_KT.T 
+            grad_x2, grad_W_K = matrix_grad(x.value[i], self.parameters[1], grad_K)
+            grad_x3, grad_W_Q = matrix_grad(x.value[i], self.parameters[0], grad_Q)
+            x.grad[i] = grad_x1 + grad_x2 + grad_x3 
+            self.gradients[0] += grad_W_Q
+            self.gradients[1] += grad_W_K
+            self.gradients[2] += grad_W_V
+            
+class attention_encoder(Graph):
+    def __init__(self,  graph:Graph,  width_qk:int, mask:np.ndarray, inputs:Port):
+        graph.nodes.append(self)
+        self.inputs:  List[Port] = [inputs]
+        self.outputs: List[Port] = [ Port(np.zeros(inputs.value.shape)) ]
+        
+        self.atten1 = attention(self,width_qk, mask, inputs)
+        
+        
 """
 CONV
 """
-
 # reshape, padding, input_size = (N, H, W, C)   
 class padding(Node):
     def __init__(self, graph, h = (0,0), w=(0,0), value = 0):                               
